@@ -16,6 +16,8 @@ type WebsocketHandlerService interface {
 
 type WebsocketService struct {
 	upgrader      websocket.Upgrader
+	clients       map[*websocket.Conn]bool // Nuevo mapa para clientes WebSocket
+	clientsMutex  sync.RWMutex
 	sessions      map[string]*domain.Session
 	sessionsMutex sync.RWMutex
 	nextSessionID int
@@ -28,12 +30,44 @@ func NewWebsocketService() *WebsocketService {
 				return true
 			},
 		},
+		clients:       make(map[*websocket.Conn]bool),
+		clientsMutex:  sync.RWMutex{},
 		sessions:      make(map[string]*domain.Session),
 		sessionsMutex: sync.RWMutex{},
 		nextSessionID: 1,
 	}
 }
 
+// RegisterClient registra un nuevo cliente WebSocket
+func (ws *WebsocketService) RegisterClient(conn *websocket.Conn) *websocket.Conn {
+	ws.clientsMutex.Lock()
+	defer ws.clientsMutex.Unlock()
+	ws.clients[conn] = true
+	return conn
+}
+
+// UnregisterClient elimina un cliente WebSocket
+func (ws *WebsocketService) UnregisterClient(conn *websocket.Conn) {
+	ws.clientsMutex.Lock()
+	defer ws.clientsMutex.Unlock()
+	delete(ws.clients, conn)
+	conn.Close()
+}
+
+// Broadcast envía un mensaje a todos los clientes conectados
+func (ws *WebsocketService) Broadcast(message []byte) {
+	ws.clientsMutex.RLock()
+	defer ws.clientsMutex.RUnlock()
+
+	for client := range ws.clients {
+		err := client.WriteMessage(websocket.TextMessage, message)
+		if err != nil {
+			log.Printf("Error broadcasting to client: %v", err)
+		}
+	}
+}
+
+// El resto de los métodos permanecen igual...
 func (ws *WebsocketService) HandleConnection(
 	w http.ResponseWriter, r *http.Request, sessionID string,
 ) error {
@@ -43,14 +77,12 @@ func (ws *WebsocketService) HandleConnection(
 		return err
 	}
 
-	log.Println(sessionID)
+	log.Println("New connection with session ID:", sessionID)
 
 	if sessionID == "" {
-		log.Println("Condición correcta")
 		sessionID = ws.generateSessionID()
+		log.Println("Generated new session ID:", sessionID)
 	}
-
-	log.Println(sessionID)
 
 	defer conn.Close()
 
@@ -77,6 +109,7 @@ func (ws *WebsocketService) addSession(sessionID string, session *domain.Session
 	defer ws.sessionsMutex.Unlock()
 
 	ws.sessions[sessionID] = session
+	log.Printf("Session %s added, total sessions: %d", sessionID, len(ws.sessions))
 }
 
 func (ws *WebsocketService) removeSession(sessionID string) {
@@ -84,6 +117,12 @@ func (ws *WebsocketService) removeSession(sessionID string) {
 	defer ws.sessionsMutex.Unlock()
 
 	delete(ws.sessions, sessionID)
+	log.Printf("Session %s removed, remaining sessions: %d", sessionID, len(ws.sessions))
+}
 
-	log.Printf("Session %s Removed", sessionID)
+// GetSessions returns the current active sessions
+func (ws *WebsocketService) GetSessions() map[string]*domain.Session {
+	ws.sessionsMutex.RLock()
+	defer ws.sessionsMutex.RUnlock()
+	return ws.sessions
 }

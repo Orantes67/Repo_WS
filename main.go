@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"os"
 	"sockets-go/infrastructure"
 
@@ -9,17 +10,28 @@ import (
 )
 
 func main() {
+	// Cargar variables de entorno
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("No se encontró archivo .env, usando variables de entorno del sistema")
+	}
+
+	// Configurar Gin
 	r := gin.Default()
 
+	// Configurar rutas
 	infrastructure.Routes(r)
 
-	godotenv.Load()
-
+	// Obtener puerto
 	port := os.Getenv("PORT")
-
 	if port == "" {
 		port = "8080"
 	}
 
-	r.Run(":" + port)
+	// Iniciar servidor
+	log.Printf("Servidor iniciado en el puerto %s", port)
+	err = r.Run(":" + port)
+	if err != nil {
+		log.Fatalf("Error al iniciar el servidor: %v", err)
+	}
 }

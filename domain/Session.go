@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,6 +14,7 @@ type Session struct {
 	SessionID    string
 	closeHandler func(sessionID string)
 	sessions     map[string]*Session
+	mutex        sync.Mutex
 }
 
 func NewSession(conn *websocket.Conn, userID string, sessions map[string]*Session) *Session {
@@ -20,6 +22,7 @@ func NewSession(conn *websocket.Conn, userID string, sessions map[string]*Sessio
 		conn:      conn,
 		SessionID: userID,
 		sessions:  sessions,
+		mutex:     sync.Mutex{},
 	}
 }
 
@@ -28,10 +31,8 @@ func (s *Session) SetCloseHandler(handler func(sessionID string)) {
 }
 
 func (s *Session) StartHandling(removeSession func(sessionID string)) {
-	//log.Println(s.SessionID)
 	s.closeHandler = removeSession
 	s.readPump()
-	//s.writePump()
 }
 
 func (s *Session) readPump() {
@@ -42,10 +43,7 @@ func (s *Session) readPump() {
 		}
 	}()
 
-	//go s.writePump()
-
 	for {
-
 		messageType, _, err := s.conn.ReadMessage()
 
 		if err != nil {
@@ -60,58 +58,40 @@ func (s *Session) readPump() {
 		}
 
 		if messageType != -1 {
-			//log.Printf("Recibido: %s, de tipo %d desde seesion %s", p, messageType, s.SessionID)
-
-			//s.broadcast(1, p)
-
-			message := fmt.Sprintf("message from client %s", s.SessionID)
-
-			session := s.sessions["consumer"]
-
-			session.SendMessage(messageType, []byte(message))
-
+			// Simple echo for client messages
+			message := fmt.Sprintf("Received message from client %s", s.SessionID)
+			s.SendMessage(websocket.TextMessage, []byte(message))
 		}
 
 		time.Sleep(17 * time.Millisecond)
 	}
-
-	//select {}
 }
 
-/* func (s *Session) writePump() {
-	defer func() {
-		s.conn.Close()
-	}()
-
-	for {
-
-		messageType := websocket.TextMessage
-		message := []byte("Message from server")
-
-		err := s.conn.WriteMessage(messageType, message)
-
-		if err != nil {
-			log.Println("Write error: ", err)
-			break
-		}
-
-		time.Sleep(10 * time.Second)
+// BroadcastToAll sends a message to all connected sessions
+func (s *Session) BroadcastToAll(messageType int, payload []byte) {
+	for _, session := range s.sessions {
+		session.SendMessage(messageType, payload)
 	}
+}
 
-	select {}
-} */
-
-func (s *Session) broadcast(messageType int, payloadbyte []byte) {
-	err := s.conn.WriteMessage(messageType, payloadbyte)
+// BroadcastNotification sends a notification to all connected clients
+func (s *Session) BroadcastNotification(notification *Notification) {
+	payload, err := notification.ToJSON()
 	if err != nil {
-		log.Println("Broadcast error: ", err)
+		log.Printf("Error marshalling notification: %v", err)
+		return
 	}
+	
+	s.BroadcastToAll(websocket.TextMessage, payload)
+	log.Printf("Broadcast notification: %s", string(payload))
 }
 
 func (s *Session) SendMessage(messageType int, payloadByte []byte) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	
 	err := s.conn.WriteMessage(messageType, payloadByte)
-
 	if err != nil {
-		log.Printf("Error en SendMessage de la sesión %s: %v", s.SessionID, err)
+		log.Printf("Error sending message to session %s: %v", s.SessionID, err)
 	}
 }
